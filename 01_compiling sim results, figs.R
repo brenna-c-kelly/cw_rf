@@ -9,40 +9,39 @@ library(data.table)
 
 sim_files <- list()
 
-for(i in 1:length(list.files("data/sim_results/"))) {
+for(i in 1:length(list.files("data/00_sim_results/", recursive = TRUE, include.dirs = TRUE, pattern = ".csv"))) {
   
   sim_files[[i]] <- 
-    fread(paste0(
-    "data/sim_results/",
-    list.files("data/sim_results/")[i]))
+    fread(paste0("data/00_sim_results/",
+                 list.files("data/00_sim_results/", recursive = TRUE, include.dirs = TRUE, pattern = ".csv")[i]))
   
 }
 
 sim_res <- map_df(sim_files, ~as.data.frame(.))
 
-sim_by_cw <- sim_res |>
+sim_res <- sim_res |>
   mutate(cw_type = paste(cw_size, cw_timedep))
-sim_by_cw <- split(sim_by_cw, sim_by_cw$cw_type)
+sim_by_cw <- split(sim_res, sim_by_cw$cw_type)
 
-mean(sim_by_cw[[1]]$ci_lower - sim_by_cw[[1]]$ci_upper)
-prop.table(table(sim_by_cw[[5]][which(sim_by_cw[[5]]$cw == "critical"), 
-                         "p_value"] < 0.05))[["TRUE"]]
-prop.table(table(sim_by_cw[[5]]$effect_recovered))
-
-R = cor.test(sim_by_cw[[5]]$true_effect, sim_by_cw[[5]]$mean)$estimate[["cor"]]
-var_r = var(sim_by_cw[[5]]$mean)
-var_f = var(sim_by_cw[[5]]$true_effect)
-
-var_f + var_r - 2*var_f*var_r*R
-rmse(sim_by_cw[[5]]$true_effect, sim_by_cw[[5]]$mean)
-
-## centering
-# subtract mean of y from y
-c_y = sim_by_cw[[5]]$true_effect - mean(sim_by_cw[[5]]$true_effect)
-# subtract mean of y_hat from y_hat
-c_yhat = sim_by_cw[[5]]$mean - mean(sim_by_cw[[5]]$mean)
-## centered RMSE for pattern accuracy
-c_rmse = rmse(c_y, c_yhat)
+# mean(sim_by_cw[[1]]$ci_lower - sim_by_cw[[1]]$ci_upper)
+# prop.table(table(sim_by_cw[[5]][which(sim_by_cw[[5]]$cw == "critical"), 
+#                          "p_value"] < 0.05))[["TRUE"]]
+# prop.table(table(sim_by_cw[[5]]$effect_recovered))
+# 
+# R = cor.test(sim_by_cw[[5]]$true_effect, sim_by_cw[[5]]$mean)$estimate[["cor"]]
+# var_r = var(sim_by_cw[[5]]$mean)
+# var_f = var(sim_by_cw[[5]]$true_effect)
+# 
+# var_f + var_r - 2*var_f*var_r*R
+# rmse(sim_by_cw[[5]]$true_effect, sim_by_cw[[5]]$mean)
+# 
+# ## centering
+# # subtract mean of y from y
+# c_y = sim_by_cw[[5]]$true_effect - mean(sim_by_cw[[5]]$true_effect)
+# # subtract mean of y_hat from y_hat
+# c_yhat = sim_by_cw[[5]]$mean - mean(sim_by_cw[[5]]$mean)
+# ## centered RMSE for pattern accuracy
+# c_rmse = rmse(c_y, c_yhat)
 
 
 ## practice with moderate smooth
@@ -69,7 +68,7 @@ cw_results_fx <- function(x) {
              # "trend_diff_mean" = summary(cw_data$trend_recovered_diff)[["Mean"]],
              # "critical_trend_diff_mean" = summary(cw_data[which(cw_data$cw == "critical"), 
              #                                              "trend_recovered_diff"])[["Mean"]],
-             "ci_width_average" = mean(cw_data$ci_lower - cw_data$ci_upper),
+             "ci_width_average" = mean(cw_data$ci_upper - cw_data$ci_lower),
              "true_peak_recovered" = ifelse(grepl("naive", cw_type) == TRUE, NA,
                                             prop.table(table(cw_data[which(cw_data$inflection_true == "peak"), 
                                                                      "inflection_recovered"]))[["TRUE"]]),
@@ -94,34 +93,56 @@ for(i in 1:length(sim_by_cw)) {
 cw_res_df <- map_df(cw_results, ~as.data.frame(.))
 cw_res_df
 
+cw_res_df_tidy <- cw_res_df |>
+  mutate(cw_type = fct_relevel(cw_type, 
+                               "wide naive", "wide smooth", 
+                               "moderate naive", "moderate smooth",
+                               "narrow naive", "narrow smooth")) |>
+  arrange(cw_type) |>
+  mutate(centered_rmse = round(centered_rmse, 3),
+         ci_width_average = round(ci_width_average, 3),
+         critical_effect_sig = round(critical_effect_sig, 3),
+         critical_pval_mean = round(critical_pval_mean, 3),
+         critical_pval_min = round(critical_pval_min, 3),
+         critical_pval_max = round(critical_pval_max, 3)) |>
+  select(!critical_effect_sig.1)
+
+cw_res_df_tidy
+
+write.csv(cw_res_df_tidy, "data/results/cw_res_df_tidy.csv", row.names = FALSE)
+
+# is the RMSE lower than the SD in the outcome?
+birth <- read.csv("data/birth_w_percentile_confounders_term_v2.csv")
+sd(birth$bw_percentile)
 
 head(sim_res)
 
-sim_res |>
-  mutate(cw_type = paste(cw_size, cw_timedep),
-         week = as.factor(as.numeric(gsub("tx_", "", treatment)))) |>
-  ggplot(aes(y = week, color = cw)) +
-  scale_color_manual(values=c("red", "black")) +
-  geom_linerange(aes(xmin = ci_lower, xmax = ci_upper), alpha = 0.35) +
-  geom_jitter(aes(x = mean), shape = 15, size = 1, alpha = 0.1) +
-  labs(x = "Predicted Change in Birthweight (g)", 
-       y = "Week", title = "Simulation results",
-       subtitle = "100 sims (5K samples each), total fx = 166, e~N(0, 10)") +
-  theme(axis.text.x = element_text(angle = 45)) +
-  guides(color = FALSE) +
-  geom_vline(xintercept = 0, linetype="dashed") +
-  coord_flip() +
-  theme_classic() +
-  # geom_text(aes(x = (ci95.hi + 0.5), y=variable, label=variable), hjust=0, fontface = "bold") +
-  # geom_text(aes(x = -1, y = variable, label=round(estimate, 2)), hjust=0, fontface = "plain") +
-  facet_wrap(~cw_type, nrow = 3)
+sim_res$cw_type <- paste(sim_res$cw_size, sim_res$cw_timedep)
+
+# sim_res |>
+#   mutate(week = as.factor(as.numeric(gsub("tx_", "", treatment)))) |>
+#   ggplot(aes(y = week, color = cw)) +
+#   scale_color_manual(values=c("orangered", "black")) +
+#   geom_linerange(aes(xmin = ci_lower, xmax = ci_upper), alpha = 0.35) +
+#   geom_jitter(aes(x = mean), shape = 15, size = 1, alpha = 0.1) +
+#   labs(x = "Predicted Change in Birthweight Percentile (by sex, gestational age)", 
+#        y = "Week", title = "Simulation results",
+#        subtitle = "~900 sims (5K samples each), e~N(0, 1)") +
+#   theme(axis.text.x = element_text(angle = 45)) +
+#   guides(color = FALSE) +
+#   geom_vline(xintercept = 0, linetype="dashed") +
+#   coord_flip() +
+#   theme_classic() +
+#   # geom_text(aes(x = (ci95.hi + 0.5), y=variable, label=variable), hjust=0, fontface = "bold") +
+#   # geom_text(aes(x = -1, y = variable, label=round(estimate, 2)), hjust=0, fontface = "plain") +
+#   facet_wrap(~cw_type, nrow = 3)
 
 
 ## plot with the true effects
-true_fx <- read.csv("data/true_cw_fx_-166.csv")
+# true_fx <- read.csv("simulation output/true_cw_fx_-15.csv")
 
-true_fx <- read.csv("data/true_cw_fx_-166.csv") |>
-  mutate(week = 1:20) |>
+true_fx <- read.csv("data/true_cw_fx_-15_v2.csv") |>
+  mutate(week = 1:36) |>
   melt(id.vars = "week") |>
   mutate(cw_type = case_when(grepl("uni_narrow", variable) == TRUE ~ "narrow naive",
                              grepl("norm_narrow", variable) == TRUE ~ "narrow smooth",
@@ -131,6 +152,9 @@ true_fx <- read.csv("data/true_cw_fx_-166.csv") |>
                              grepl("norm_wide", variable) == TRUE ~ "wide smooth"),
          ci_lower = NA, ci_upper = NA, cw = NA) |>
   rename(mean = value)
+
+sim_by_cw <- sim_res |>
+  mutate(cw_type = paste(cw_size, cw_timedep))
 
 true_sim = sim_res |>
   mutate(cw_type = paste(cw_size, cw_timedep),
@@ -156,13 +180,12 @@ true_sim |>
   geom_point(aes(x = mean), shape = 15, size = 1, alpha = 0.1) +
   # geom_point(data = ~filter(.x, true_pred == "true"), 
   #            aes(y = week, x = mean, group = cw_type), color = "gray80") +
-  labs(x = "Predicted Change in Birthweight (g)", 
-       y = "Week", title = "Simulation results (true effects in gray; critical windows in red)",
-       subtitle = "100 sims per CW type (5K samples each), total fx = -166, e~N(0, 10)") +
+  labs(x = "Predicted Change in Birthweight Percentile", 
+       y = "Week", title = "Simulation results by critical window structure") +
   coord_flip() +
   guides(color = FALSE) +
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.text.x = element_text(angle = 90)) +
   facet_wrap(~cw_type, nrow = 3)
 
 # p values and effect size
